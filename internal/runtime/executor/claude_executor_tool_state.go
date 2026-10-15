@@ -157,7 +157,7 @@ func (e *ClaudeExecutor) rememberClaudeOAuthToolAliases(payload []byte, aliases 
 
 // Run after final header construction. Do not change the business payload: a
 // delta cannot be turned into a new thread without the client's full history.
-// A missing state, account switch or deliberate caller beta change instead uses
+// A missing state, account switch or new caller beta requirement instead uses
 // the existing request-scoped 404 replay signal understood by Claude Code.
 func (e *ClaudeExecutor) prepareClaudeThreadFingerprint(r *http.Request, payload []byte, auth *cliproxyauth.Auth, apiKey string, incoming http.Header) (claudeThreadFingerprint, error) {
 	fingerprint := claudeThreadFingerprint{
@@ -187,10 +187,19 @@ func (e *ClaudeExecutor) prepareClaudeThreadFingerprint(r *http.Request, payload
 	if !ok || state.fingerprint == nil ||
 		state.fingerprint.credential != fingerprint.credential ||
 		state.fingerprint.upstream != fingerprint.upstream ||
-		state.fingerprint.callerBetas != fingerprint.callerBetas ||
 		state.fingerprint.operatorBetas != fingerprint.operatorBetas {
 		return fingerprint, newClaudeThreadNotFoundError()
 	}
+	// SDK requests can omit optional betas or explicitly name a beta CPA had
+	// already derived from the create payload. Neither changes the existing
+	// thread's capabilities. Only a genuinely new requirement needs a replay.
+	knownBetas := claudeRequestedBetas(state.fingerprint.callerBetas+","+state.fingerprint.anthropicBeta, nil)
+	for beta := range claudeRequestedBetas(fingerprint.callerBetas, nil) {
+		if !knownBetas[beta] {
+			return fingerprint, newClaudeThreadNotFoundError()
+		}
+	}
+	fingerprint.callerBetas = state.fingerprint.callerBetas
 	fingerprint.anthropicBeta = state.fingerprint.anthropicBeta
 	if fingerprint.anthropicBeta == "" {
 		r.Header.Del("Anthropic-Beta")
