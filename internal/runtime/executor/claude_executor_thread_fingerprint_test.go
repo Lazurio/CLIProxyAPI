@@ -8,8 +8,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -105,11 +108,14 @@ func claudeThreadTestAuth(id, baseURL string) *cliproxyauth.Auth {
 	}
 }
 
-func executeClaudeThreadTest(executor *ClaudeExecutor, auth *cliproxyauth.Auth, payload string, stream bool) error {
+func executeClaudeThreadTest(executor *ClaudeExecutor, auth *cliproxyauth.Auth, payload string, stream bool, extraBeta ...string) error {
 	headers := http.Header{}
 	headers.Set("User-Agent", "claude-cli/2.1.301 (external, sdk-ts, agent-sdk/0.3.276)")
 	headers.Set("X-App", "cli")
 	headers.Set("Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,message-threads-2026-08-12")
+	if len(extraBeta) > 0 {
+		headers.Set("Anthropic-Beta", headers.Get("Anthropic-Beta")+","+extraBeta[0])
+	}
 	req := cliproxyexecutor.Request{Model: "claude-opus-5-5", Payload: []byte(payload)}
 	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, Headers: headers}
 	if !stream {
@@ -126,6 +132,119 @@ func executeClaudeThreadTest(executor *ClaudeExecutor, auth *cliproxyauth.Auth, 
 		}
 	}
 	return nil
+}
+
+func TestClaudeExecutor_ThreadFingerprintChangesRequireReplay(t *testing.T) {
+	for _, change := range []string{"missing state", "caller betas", "operator betas", "upstream"} {
+		t.Run(change, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				writeClaudeThreadTestResponse(w, false, calls)
+			}))
+			defer server.Close()
+			cfg := &config.Config{}
+			executor := NewClaudeExecutor(cfg)
+			auth := claudeThreadTestAuth("account-a", server.URL)
+			if change != "missing state" {
+				if err := executeClaudeThreadTest(executor, auth, claudeThreadCreateFixture, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := calls
+			var extraBeta []string
+			switch change {
+			case "caller betas":
+				extraBeta = []string{"changed-feature-2099-01-01"}
+			case "operator betas":
+				cfg.ClaudeHeaderDefaults.AnthropicBetaStrip = []string{claudeAdvancedToolUseBeta}
+			case "upstream":
+				auth.Attributes["base_url"] = server.URL + "/other"
+			}
+			err := executeClaudeThreadTest(executor, auth, claudeThreadContinueFixture, false, extraBeta...)
+			status, ok := err.(interface{ StatusCode() int })
+			if !ok || status.StatusCode() != http.StatusNotFound || calls != before {
+				t.Fatalf("want local replay signal; error=%v, upstream calls=%d (before %d)", err, calls, before)
+			}
+		})
+	}
+}
+
+// Exercise the actual manager + sticky selector + Claude executor with four
+// credentials. Once the first account reaches a 5h limit, the client gets one
+// replay signal, then creates its full conversation on a healthy account and
+// stays there. No delta is submitted under a different account's thread ID.
+func TestClaudeExecutor_ThreadStickyQuotaFailover(t *testing.T) {
+	var owner string
+	exhausted := false
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		key := r.Header.Get("Authorization")
+		calls++
+		if owner == "" {
+			owner = key
+		}
+		if exhausted && key == owner {
+			w.Header().Set("Anthropic-Ratelimit-Unified-Status", "rejected")
+			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
+			w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", fmt.Sprint(time.Now().Add(time.Hour).Unix()))
+			w.Header().Set("Retry-After", "3600")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"5h usage exhausted"}}`)
+			return
+		}
+		if gjson.GetBytes(body, "thread.type").String() == "continue" && key != owner {
+			t.Error("cross-account delta reached upstream")
+		}
+		writeClaudeThreadTestResponse(w, false, calls)
+	}))
+	defer server.Close()
+	selector := cliproxyauth.NewSessionAffinitySelectorWithConfig(cliproxyauth.SessionAffinityConfig{TTL: 24 * time.Hour, Fallback: &cliproxyauth.RoundRobinSelector{}})
+	defer selector.Stop()
+	manager := cliproxyauth.NewManager(nil, selector, nil)
+	manager.SetRetryConfig(0, 0, 0)
+	manager.RegisterExecutor(NewClaudeExecutor(&config.Config{}))
+	reg := registry.GetGlobalRegistry()
+	for i := 0; i < 4; i++ {
+		auth := claudeThreadTestAuth(uuid.NewString(), server.URL)
+		reg.RegisterClient(auth.ID, "claude", []*registry.ModelInfo{{ID: "claude-opus-5-5"}})
+		t.Cleanup(func() { reg.UnregisterClient(auth.ID) })
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, Headers: http.Header{"X-Claude-Code-Session-Id": {uuid.NewString()}}}
+	run := func(payload string) (cliproxyexecutor.Response, error) {
+		return manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: "claude-opus-5-5", Payload: []byte(payload)}, opts)
+	}
+	if _, err := run(claudeThreadCreateFixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(claudeThreadContinueFixture); err != nil {
+		t.Fatalf("sticky continuation failed: %v", err)
+	}
+	exhausted = true
+	_, err := run(claudeThreadContinueFixture)
+	status, ok := err.(interface{ StatusCode() int })
+	if !ok || status.StatusCode() != http.StatusNotFound {
+		t.Fatalf("quota failover should request client replay, got %v", err)
+	}
+	response, err := run(claudeThreadCreateFixture)
+	if err != nil {
+		t.Fatalf("replay on replacement failed: %v", err)
+	}
+	// The replacement is now the legitimate thread owner.
+	previous := gjson.GetBytes(response.Payload, "id").String()
+	owner = ""
+	exhausted = false
+	continuation := strings.ReplaceAll(claudeThreadContinueFixture, "msg-thread-1", previous)
+	if _, err := run(continuation); err != nil {
+		t.Fatalf("replacement continuation failed: %v", err)
+	}
+	if calls != 5 {
+		t.Fatalf("upstream calls=%d, want create + continue + one 429 + replay + continue", calls)
+	}
 }
 
 func writeClaudeThreadTestResponse(w http.ResponseWriter, stream bool, id int) {
