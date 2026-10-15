@@ -274,6 +274,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	); errHeaders != nil {
 		return nil, errHeaders
 	}
+	threadFingerprint, errThread := e.prepareClaudeThreadFingerprint(httpReq, bodyForUpstream, auth, apiKey, incomingHeaders)
+	if errThread != nil {
+		return nil, errThread
+	}
 	fastRequest := isAnthropicUpstreamBase(baseURL) && claudeRequestIsFast(httpReq, bodyForUpstream)
 	authID, authLabel, authType, authValue := claudeAuthLogIdentity(auth)
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
@@ -434,7 +438,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			}
 			if upstreamCompleted {
 				commitClaudeContinuity(diagnosticsState, upstreamMessageID, helps.HeaderValueCaseInsensitive(httpResp.Header, "request-id"))
-				e.rememberClaudeOAuthToolAliases(body, oauthToolNamesReverseMap, upstreamMessageID)
+				e.rememberClaudeOAuthToolAliases(bodyForUpstream, oauthToolNamesReverseMap, upstreamMessageID, threadFingerprint)
 			}
 			return
 		}
@@ -509,7 +513,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		}
 		if upstreamCompleted {
 			commitClaudeContinuity(diagnosticsState, upstreamMessageID, helps.HeaderValueCaseInsensitive(httpResp.Header, "request-id"))
-			e.rememberClaudeOAuthToolAliases(body, oauthToolNamesReverseMap, upstreamMessageID)
+			e.rememberClaudeOAuthToolAliases(bodyForUpstream, oauthToolNamesReverseMap, upstreamMessageID, threadFingerprint)
 		}
 	}()
 	result := &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}
