@@ -1,9 +1,14 @@
 package executor
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/tidwall/gjson"
 )
@@ -17,34 +22,50 @@ var claudeOAuthToolAliasStoreInitMu sync.Mutex
 
 type claudeOAuthToolAliasStore struct {
 	mu      sync.Mutex
-	entries map[string]map[string]string
+	entries map[string]claudeOAuthThreadState
 	order   []string
 }
 
-func (s *claudeOAuthToolAliasStore) load(keys []string) (map[string]string, bool) {
+// Thread betas are immutable upstream, even when a continuation omits the
+// tools/thinking/cache fields from which CPA originally derived those betas.
+// Keep their wire value alongside the existing bounded, per-message alias state.
+type claudeThreadFingerprint struct {
+	anthropicBeta string
+	callerBetas   string
+	credential    string
+	upstream      string
+}
+
+type claudeOAuthThreadState struct {
+	aliases     map[string]string
+	fingerprint *claudeThreadFingerprint
+}
+
+func (s *claudeOAuthToolAliasStore) load(keys []string) (claudeOAuthThreadState, bool) {
 	if s == nil {
-		return nil, false
+		return claudeOAuthThreadState{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, key := range keys {
-		aliases, ok := s.entries[key]
+		state, ok := s.entries[key]
 		if !ok {
 			continue
 		}
-		return cloneClaudeOAuthToolAliasMap(aliases), true
+		state.aliases = cloneClaudeOAuthToolAliasMap(state.aliases)
+		return state, true
 	}
-	return nil, false
+	return claudeOAuthThreadState{}, false
 }
 
-func (s *claudeOAuthToolAliasStore) save(keys []string, aliases map[string]string) {
+func (s *claudeOAuthToolAliasStore) save(keys []string, aliases map[string]string, fingerprint *claudeThreadFingerprint) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.entries == nil {
-		s.entries = make(map[string]map[string]string)
+		s.entries = make(map[string]claudeOAuthThreadState)
 	}
 	for _, key := range keys {
 		if key == "" {
@@ -53,7 +74,7 @@ func (s *claudeOAuthToolAliasStore) save(keys []string, aliases map[string]strin
 		if _, exists := s.entries[key]; !exists {
 			s.order = append(s.order, key)
 		}
-		s.entries[key] = cloneClaudeOAuthToolAliasMap(aliases)
+		s.entries[key] = claudeOAuthThreadState{aliases: cloneClaudeOAuthToolAliasMap(aliases), fingerprint: fingerprint}
 	}
 	for len(s.order) > claudeOAuthToolAliasStateLimit {
 		oldest := s.order[0]
@@ -107,17 +128,17 @@ func claudeThreadContinuationNeedsAliasState(payload []byte) bool {
 
 func (e *ClaudeExecutor) prepareClaudeOAuthToolNamesForRequest(payload []byte, options claudeMCPAliasOptions) ([]byte, map[string]string, error) {
 	if claudeThreadContinuationNeedsAliasState(payload) {
-		aliases, ok := e.claudeOAuthToolAliasStore().load(claudeOAuthToolAliasKeys(payload, ""))
+		state, ok := e.claudeOAuthToolAliasStore().load(claudeOAuthToolAliasKeys(payload, ""))
 		if !ok {
 			return nil, nil, newClaudeThreadNotFoundError()
 		}
-		return payload, aliases, nil
+		return payload, state.aliases, nil
 	}
 	remapped, aliases := prepareClaudeOAuthToolNamesForUpstream(payload, options)
 	return remapped, aliases, nil
 }
 
-func (e *ClaudeExecutor) rememberClaudeOAuthToolAliases(payload []byte, aliases map[string]string, messageID string) {
+func (e *ClaudeExecutor) rememberClaudeOAuthToolAliases(payload []byte, aliases map[string]string, messageID string, fingerprints ...claudeThreadFingerprint) {
 	if gjson.GetBytes(payload, "thread.type").String() == "" {
 		return
 	}
@@ -125,7 +146,52 @@ func (e *ClaudeExecutor) rememberClaudeOAuthToolAliases(payload []byte, aliases 
 	if len(keys) == 0 {
 		return
 	}
-	e.claudeOAuthToolAliasStore().save(keys, aliases)
+	var fingerprint *claudeThreadFingerprint
+	if len(fingerprints) > 0 {
+		value := fingerprints[0]
+		fingerprint = &value
+	}
+	e.claudeOAuthToolAliasStore().save(keys, aliases, fingerprint)
+}
+
+// Run after final header construction. Do not change the business payload: a
+// delta cannot be turned into a new thread without the client's full history.
+// A missing state, account switch or deliberate caller beta change instead uses
+// the existing request-scoped 404 replay signal understood by Claude Code.
+func (e *ClaudeExecutor) prepareClaudeThreadFingerprint(r *http.Request, payload []byte, auth *cliproxyauth.Auth, apiKey string, incoming http.Header) (claudeThreadFingerprint, error) {
+	fingerprint := claudeThreadFingerprint{
+		anthropicBeta: r.Header.Get("Anthropic-Beta"),
+		callerBetas:   strings.TrimSpace(strings.Join(helps.HeaderValuesCaseInsensitive(incoming, "Anthropic-Beta"), ",")),
+		upstream:      r.URL.String(),
+	}
+	if auth != nil {
+		fingerprint.credential = strings.TrimSpace(auth.ID)
+		if fingerprint.credential == "" {
+			fingerprint.credential = strings.TrimSpace(auth.FileName)
+		}
+	}
+	if fingerprint.credential == "" {
+		// Anonymous embedders have no stable auth-record ID. Keep secrets out of
+		// the cache and require a replay when their credential changes.
+		fingerprint.credential = fmt.Sprintf("key:%x", sha256.Sum256([]byte(apiKey)))
+	}
+	if gjson.GetBytes(payload, "thread.type").String() != "continue" {
+		return fingerprint, nil
+	}
+	state, ok := e.claudeOAuthToolAliasStore().load(claudeOAuthToolAliasKeys(payload, ""))
+	if !ok || state.fingerprint == nil ||
+		state.fingerprint.credential != fingerprint.credential ||
+		state.fingerprint.upstream != fingerprint.upstream ||
+		state.fingerprint.callerBetas != fingerprint.callerBetas {
+		return fingerprint, newClaudeThreadNotFoundError()
+	}
+	fingerprint.anthropicBeta = state.fingerprint.anthropicBeta
+	if fingerprint.anthropicBeta == "" {
+		r.Header.Del("Anthropic-Beta")
+	} else {
+		r.Header.Set("Anthropic-Beta", fingerprint.anthropicBeta)
+	}
+	return fingerprint, nil
 }
 
 const claudeThreadNotFoundErrorMessage = "No thread state was found for the requested previous_message_id. Replay the full conversation with thread create to start a new Thread."
