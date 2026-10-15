@@ -170,6 +170,51 @@ func TestClaudeExecutor_ThreadFingerprintChangesRequireReplay(t *testing.T) {
 	}
 }
 
+func TestClaudeExecutor_ThreadCallerBetaSubsetDoesNotForceReplay(t *testing.T) {
+	for _, change := range []string{"removed optional beta", "already emitted beta"} {
+		t.Run(change, func(t *testing.T) {
+			calls := 0
+			var beta string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					beta = r.Header.Get("Anthropic-Beta")
+				} else if got := r.Header.Get("Anthropic-Beta"); got != beta {
+					t.Errorf("thread beta changed: %q -> %q", beta, got)
+				}
+				writeClaudeThreadTestResponse(w, false, calls)
+			}))
+			defer server.Close()
+			executor := NewClaudeExecutor(&config.Config{})
+			auth := claudeThreadTestAuth("account-a", server.URL)
+			var createExtra, continueExtra []string
+			if change == "removed optional beta" {
+				createExtra = []string{claudeThinkingBindingBeta}
+			} else {
+				continueExtra = []string{claudeAdvancedToolUseBeta}
+			}
+			if err := executeClaudeThreadTest(executor, auth, claudeThreadCreateFixture, false, createExtra...); err != nil {
+				t.Fatal(err)
+			}
+			if err := executeClaudeThreadTest(executor, auth, claudeThreadContinueFixture, false, continueExtra...); err != nil {
+				t.Fatalf("compatible caller beta change forced a replay: %v", err)
+			}
+			if calls != 2 {
+				t.Fatalf("calls=%d, want 2", calls)
+			}
+			if change == "removed optional beta" {
+				continuation := strings.Replace(claudeThreadContinueFixture, "msg-thread-1", "msg-thread-2", 1)
+				if err := executeClaudeThreadTest(executor, auth, continuation, false, createExtra...); err != nil {
+					t.Fatalf("restoring an original caller beta forced a replay: %v", err)
+				}
+				if calls != 3 {
+					t.Fatalf("calls=%d, want 3", calls)
+				}
+			}
+		})
+	}
+}
+
 // Exercise the actual manager + sticky selector + Claude executor with four
 // credentials. Once the first account reaches a 5h limit, the client gets one
 // replay signal, then creates its full conversation on a healthy account and
