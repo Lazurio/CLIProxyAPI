@@ -32,6 +32,7 @@ type claudeOAuthToolAliasStore struct {
 type claudeThreadFingerprint struct {
 	anthropicBeta string
 	callerBetas   string
+	operatorBetas string
 	credential    string
 	upstream      string
 }
@@ -164,6 +165,10 @@ func (e *ClaudeExecutor) prepareClaudeThreadFingerprint(r *http.Request, payload
 		callerBetas:   strings.TrimSpace(strings.Join(helps.HeaderValuesCaseInsensitive(incoming, "Anthropic-Beta"), ",")),
 		upstream:      r.URL.String(),
 	}
+	if e.cfg != nil {
+		hd := e.cfg.ClaudeHeaderDefaults
+		fingerprint.operatorBetas = fmt.Sprintf("%q|%q", hd.AnthropicBetaStrip, hd.AnthropicBetaAppend)
+	}
 	if auth != nil {
 		fingerprint.credential = strings.TrimSpace(auth.ID)
 		if fingerprint.credential == "" {
@@ -182,7 +187,8 @@ func (e *ClaudeExecutor) prepareClaudeThreadFingerprint(r *http.Request, payload
 	if !ok || state.fingerprint == nil ||
 		state.fingerprint.credential != fingerprint.credential ||
 		state.fingerprint.upstream != fingerprint.upstream ||
-		state.fingerprint.callerBetas != fingerprint.callerBetas {
+		state.fingerprint.callerBetas != fingerprint.callerBetas ||
+		state.fingerprint.operatorBetas != fingerprint.operatorBetas {
 		return fingerprint, newClaudeThreadNotFoundError()
 	}
 	fingerprint.anthropicBeta = state.fingerprint.anthropicBeta
