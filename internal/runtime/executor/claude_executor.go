@@ -188,6 +188,12 @@ func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor {
 
 func (e *ClaudeExecutor) Identifier() string { return "claude" }
 
+// UsesConfig reports whether the executor was created for cfg. Auth updates
+// must retain this executor's thread state while requests use the current auth.
+func (e *ClaudeExecutor) UsesConfig(cfg *config.Config) bool {
+	return e != nil && e.cfg == cfg
+}
+
 var _ cliproxyauth.NativeToolSearchSupport = (*ClaudeExecutor)(nil)
 
 // SupportsNativeToolSearch reports whether a credential can receive Codex
