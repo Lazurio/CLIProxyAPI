@@ -1,0 +1,71 @@
+name: Lazurio container
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact merged source commit (40 lowercase hexadecimal characters)
+        required: true
+        type: string
+      version:
+        description: Qualified Lazurio version, for example 8.0.30-lazurio.thread3
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: lazurio-container-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'Lazurio/CLIProxyAPI' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      VERSION: ${{ inputs.version }}
+      IMAGE: ghcr.io/lazurio/cliproxyapi
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the immutable merged source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-lazurio\.[a-zA-Z0-9.-]+$ ]]
+          git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main
+          git checkout --detach "$SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+      - name: Build the Linux amd64 container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$SOURCE_COMMIT" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label org.opencontainers.image.source=https://github.com/Lazurio/CLIProxyAPI \
+            --label org.opencontainers.image.revision="$SOURCE_COMMIT" \
+            --tag "$IMAGE:$VERSION" .
+      - name: Publish using this repository's package permission
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker push "$IMAGE:$VERSION"
+          digest=$(docker image inspect "$IMAGE:$VERSION" --format '{{index .RepoDigests 0}}')
+          [[ "$digest" =~ ^ghcr.io/lazurio/cliproxyapi@sha256:[0-9a-f]{64}$ ]]
+          {
+            printf 'Source: `%s`\n\n' "$SOURCE_COMMIT"
+            printf 'Version: `%s`\n\n' "$VERSION"
+            printf 'Deployment reference: `%s`\n' "$digest"
+          } >> "$GITHUB_STEP_SUMMARY"
