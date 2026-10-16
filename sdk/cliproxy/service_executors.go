@@ -308,6 +308,13 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 	case "antigravity":
 		s.coreManager.RegisterExecutor(executor.NewAntigravityExecutor(cfg))
 	case "claude":
+		if !forceReplace {
+			if existing, ok := s.coreManager.Executor("claude"); ok {
+				if claude, okClaude := existing.(*executor.ClaudeExecutor); okClaude && claude.UsesConfig(cfg) {
+					return
+				}
+			}
+		}
 		s.coreManager.RegisterExecutor(executor.NewClaudeExecutor(cfg))
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
 		s.coreManager.RegisterExecutor(executor.NewKimiExecutor(cfg))
