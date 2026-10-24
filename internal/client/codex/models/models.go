@@ -89,6 +89,43 @@ func BuildResponseForClientWithSearchToolRoutes(availableModels []map[string]any
 	}
 }
 
+// HideModelsOutsideProviders sets visibility "hide" on every catalog entry
+// none of whose routing providers is in visibleProviders, so the Codex model
+// picker lists only those providers' models. Hidden entries keep their
+// metadata and stay usable by explicit name. An empty visibleProviders or a
+// nil providersForModel leaves the payload unchanged.
+func HideModelsOutsideProviders(payload map[string]any, providersForModel ProvidersForModelFunc, visibleProviders []string) {
+	if payload == nil || providersForModel == nil {
+		return
+	}
+	visible := make(map[string]struct{}, len(visibleProviders))
+	for _, provider := range visibleProviders {
+		if provider = strings.ToLower(strings.TrimSpace(provider)); provider != "" {
+			visible[provider] = struct{}{}
+		}
+	}
+	if len(visible) == 0 {
+		return
+	}
+	models, _ := payload["models"].([]map[string]any)
+	for _, entry := range models {
+		slug := strings.TrimSpace(stringModelValue(entry, "slug"))
+		if slug == "" {
+			continue
+		}
+		shown := false
+		for _, provider := range providersForModel(slug) {
+			if _, ok := visible[strings.ToLower(strings.TrimSpace(provider))]; ok {
+				shown = true
+				break
+			}
+		}
+		if !shown {
+			entry["visibility"] = "hide"
+		}
+	}
+}
+
 // MarshalCompact serializes a Codex client catalog as a single JSON line.
 // HTML escaping is disabled so instruction text is not expanded into \u003c sequences.
 func MarshalCompact(payload any) ([]byte, error) {

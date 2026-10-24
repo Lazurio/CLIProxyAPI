@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestClientCodexOptimizeMultiAgentV2(t *testing.T) {
 			if errUnmarshal := yaml.Unmarshal([]byte(tc.raw), &sdkCfg); errUnmarshal != nil {
 				t.Fatalf("decode SDK config: %v", errUnmarshal)
 			}
-			if sdkCfg.Client.Codex != cfg.Client.Codex {
+			if !reflect.DeepEqual(sdkCfg.Client.Codex, cfg.Client.Codex) {
 				t.Fatal("SDK client configuration differs")
 			}
 			data, errMarshal := json.Marshal(cfg)
@@ -48,7 +49,7 @@ func TestClientCodexOptimizeMultiAgentV2(t *testing.T) {
 			if errUnmarshal := json.Unmarshal(data, &decoded); errUnmarshal != nil {
 				t.Fatalf("decode JSON: %v", errUnmarshal)
 			}
-			if decoded.Client != cfg.Client || bytes.Count(data, []byte(`"optimize-multi-agent-v2"`)) != 1 {
+			if !reflect.DeepEqual(decoded.Client, cfg.Client) || bytes.Count(data, []byte(`"optimize-multi-agent-v2"`)) != 1 {
 				t.Fatal("JSON must contain only the canonical client setting")
 			}
 		})
@@ -120,7 +121,7 @@ func TestClientCodexOptimizeMultiAgentV2Migration(t *testing.T) {
 			cfg.CodexHeaderDefaults.UserAgent = "oauth-agent"
 			cfg.OAuthOnlyFields = map[string]bool{"codex.response-steering": true, "codex-header-defaults.user-agent": true}
 			api := cfg.ForAPIKey()
-			if api.Client != cfg.Client || !api.Codex.ResponseSteering || !cfg.Codex.ResponseSteering || api.CodexHeaderDefaults.UserAgent != "" || cfg.CodexHeaderDefaults.UserAgent != "oauth-agent" {
+			if !reflect.DeepEqual(api.Client, cfg.Client) || !api.Codex.ResponseSteering || !cfg.Codex.ResponseSteering || api.CodexHeaderDefaults.UserAgent != "" || cfg.CodexHeaderDefaults.UserAgent != "oauth-agent" {
 				t.Fatal("API-key scope changed client configuration or shared state")
 			}
 			snapshot, errMarshal := yaml.Marshal(cfg)
