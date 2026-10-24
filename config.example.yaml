@@ -329,6 +329,10 @@ client:
     # Default false. Applies to both OAuth and API-key credentials across providers.
     # Legacy provider paths migrate here; this path wins conflicts, including explicit false.
     optimize-multi-agent-v2: false
+    # Show only models routed by these providers in the Codex client model picker
+    # (e.g. ["codex"]). Other models stay usable by explicit name but are hidden.
+    # Empty (default) shows every available model.
+    # visible-providers: ["codex"]
     # Cache upstream web search results per session so replayed Codex web_search_call items
     # that omit results still retain search results in later turns.
     web-search-result-cache:

@@ -137,6 +137,12 @@ type CodexClientConfig struct {
 	// WebSearchResultCache configures caching of upstream web search results for
 	// Codex Responses clients that drop search results from replayed history.
 	WebSearchResultCache CodexWebSearchResultCacheConfig `yaml:"web-search-result-cache" json:"web-search-result-cache"`
+
+	// VisibleProviders limits the Codex client model picker to models routed by
+	// one of these providers (e.g. ["codex"]). Other models stay in the catalog
+	// with visibility "hide", so a client that names one explicitly still runs
+	// it. Empty (default) shows every available model.
+	VisibleProviders []string `yaml:"visible-providers,omitempty" json:"visible-providers,omitempty"`
 }
 
 const (
