@@ -1,0 +1,27 @@
+name: lazurio-contract-tests
+
+# Proxy behaviour that Lazurio's deployments rely on, pinned by tests that run
+# on every pull request, upstream syncs included. Upstream's own pull request
+# workflow only builds. A separate file keeps upstream syncs free of conflicts.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Codex signed in with ChatGPT behind this proxy as its gateway
+      # (Lazurio/LazurioPlatform#735): no personal credential upstream, the
+      # Fast tier passes through.
+      - name: Codex ChatGPT sign-in gateway
+        run: go test ./internal/api -run '^TestCodexChatGPTSignInGateway' -count=1
