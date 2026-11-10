@@ -15,7 +15,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // The file watcher rebinds executors when any account is added or refreshed.
@@ -32,7 +32,7 @@ func TestClaudeExecutorBinding_AuthUpdatesPreserveThreads(t *testing.T) {
 				mu.Lock()
 				defer mu.Unlock()
 				tokens = append(tokens, r.Header.Get("Authorization"))
-				if gjson.GetBytes(body, "thread.type").String() == "create" {
+				if ojson.GetBytes(body, "thread.type").String() == "create" {
 					creationBetas = r.Header.Get("Anthropic-Beta")
 				} else if r.Header.Get("Anthropic-Beta") != creationBetas {
 					t.Error("auth update changed the thread's upstream beta header")

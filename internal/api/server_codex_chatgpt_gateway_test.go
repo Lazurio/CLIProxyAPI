@@ -14,7 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // A Codex client signed in with ChatGPT can use this proxy as its gateway
@@ -160,7 +160,7 @@ func TestCodexChatGPTSignInGatewayServesFromItsOwnAccount(t *testing.T) {
 					t.Errorf("upstream body carries the caller's %q", secret)
 				}
 			}
-			tier := gjson.GetBytes(sentBody, "service_tier")
+			tier := ojson.GetBytes(sentBody, "service_tier")
 			if testCase.tier == "" {
 				if tier.Exists() {
 					t.Errorf("upstream service_tier = %s, want absent", tier.Raw)

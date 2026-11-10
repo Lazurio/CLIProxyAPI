@@ -16,7 +16,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 const claudeThreadCreateFixture = `{"model":"claude-opus-5-5","thread":{"type":"create"},"system":"Test assistant","messages":[{"role":"user","content":"Remember the word orchard."}],"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"}],"thinking":{"type":"adaptive"},"max_tokens":128}`
@@ -32,7 +32,7 @@ func TestClaudeExecutor_ThreadContinuationKeepsCreationBetas(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				calls++
-				if gjson.GetBytes(body, "thread.type").String() == "create" {
+				if ojson.GetBytes(body, "thread.type").String() == "create" {
 					createdBetas = r.Header.Get("Anthropic-Beta")
 					if !strings.Contains(createdBetas, claudeAdvancedToolUseBeta) {
 						t.Error("creation must exercise body-derived advanced-tool-use beta")
@@ -239,7 +239,7 @@ func TestClaudeExecutor_ThreadStickyQuotaFailover(t *testing.T) {
 			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"5h usage exhausted"}}`)
 			return
 		}
-		if gjson.GetBytes(body, "thread.type").String() == "continue" && key != owner {
+		if ojson.GetBytes(body, "thread.type").String() == "continue" && key != owner {
 			t.Error("cross-account delta reached upstream")
 		}
 		writeClaudeThreadTestResponse(w, false, calls)
@@ -280,7 +280,7 @@ func TestClaudeExecutor_ThreadStickyQuotaFailover(t *testing.T) {
 		t.Fatalf("replay on replacement failed: %v", err)
 	}
 	// The replacement is now the legitimate thread owner.
-	previous := gjson.GetBytes(response.Payload, "id").String()
+	previous := ojson.GetBytes(response.Payload, "id").String()
 	owner = ""
 	exhausted = false
 	continuation := strings.ReplaceAll(claudeThreadContinueFixture, "msg-thread-1", previous)
