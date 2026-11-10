@@ -1450,8 +1450,8 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 	}
 	select {
 	case <-secondSubscribe:
-	case <-time.After(time.Second):
-		t.Fatal("new subscription did not start while the old scope remained active")
+	case <-time.After(3 * homeSubscriberRetryInitial):
+		t.Fatal("new subscription did not start after heartbeat loss and backoff while the old scope remained active")
 	}
 	service.homeMu.Lock()
 	exposedRegistry := service.homeRegistry

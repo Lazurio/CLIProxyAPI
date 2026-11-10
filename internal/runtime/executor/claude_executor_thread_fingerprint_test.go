@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/MoeForge/moego/ojson"
 )
 
 const claudeThreadCreateFixture = `{"model":"claude-opus-5-5","thread":{"type":"create"},"system":"Test assistant","messages":[{"role":"user","content":"Remember the word orchard."}],"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"}],"thinking":{"type":"adaptive"},"max_tokens":128}`
